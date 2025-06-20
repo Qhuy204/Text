@@ -6,9 +6,11 @@ import { colors } from "@/constants/colors"
 import { Settings, Info, HelpCircle, Sliders, RefreshCw } from "lucide-react-native"
 import AsyncStorage from "@react-native-async-storage/async-storage"
 import { isModelLoaded, reloadModel } from "@/utils/model-handler"
+import { loadModel } from "@/utils/model-handler"
 
 // Cấu trúc dữ liệu cho cài đặt model
 interface ModelSettings {
+  selectedModel: "CNN" | "SVM"
   enhanceImage: boolean
   postProcess: boolean
 }
@@ -21,6 +23,43 @@ export default function SettingsScreen() {
   const [postProcess, setPostProcess] = useState(true)
   const [isLoading, setIsLoading] = useState(false)
   const [modelLoaded, setModelLoaded] = useState(false)
+  const [selectedModel, setSelectedModel] = useState<"CNN" | "SVM">("CNN")
+  // ✅ Load model khi đổi switch
+  const handleModelChange = async (model: "CNN" | "SVM") => {
+    setIsLoading(true)
+    try {
+      const result = await loadModel(model)
+      if (result.success && result.current_model) {
+        setSelectedModel(result.current_model)
+        await saveSettings(result.current_model) // ⬅ lưu lại model mới
+        Alert.alert("Thành công", `Đã chuyển sang mô hình ${result.current_model}`)
+      } else {
+        Alert.alert("Lỗi", "Không thể chuyển model. Vui lòng thử lại.")
+      }
+    } catch (error) {
+      console.error("Lỗi khi chuyển model:", error)
+      Alert.alert("Lỗi", "Đã xảy ra lỗi khi chuyển model.")
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  // ✅ Lưu settings
+  const saveSettings = async (modelOverride?: "CNN" | "SVM") => {
+    try {
+      const settings: ModelSettings = {
+        selectedModel: modelOverride || selectedModel,
+        enhanceImage,
+        postProcess,
+      }
+      await AsyncStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings))
+    } catch (error) {
+      console.error("Lỗi khi lưu cài đặt:", error)
+    }
+  }
+    
+
+
 
   // Tải cài đặt khi component mount
   useEffect(() => {
@@ -45,6 +84,7 @@ export default function SettingsScreen() {
       const settingsJson = await AsyncStorage.getItem(SETTINGS_STORAGE_KEY)
       if (settingsJson) {
         const settings: ModelSettings = JSON.parse(settingsJson)
+        setSelectedModel(settings.selectedModel || "CNN")
         setEnhanceImage(settings.enhanceImage)
         setPostProcess(settings.postProcess)
       }
@@ -53,28 +93,29 @@ export default function SettingsScreen() {
     }
   }
 
-  // Lưu cài đặt vào AsyncStorage
-  const saveSettings = async () => {
-    try {
-      const settings: ModelSettings = {
-        enhanceImage,
-        postProcess,
-      }
-      await AsyncStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings))
-    } catch (error) {
-      console.error("Lỗi khi lưu cài đặt:", error)
-    }
-  }
+  // // Lưu cài đặt vào AsyncStorage
+  // const saveSettings = async () => {
+  //   try {
+  //     const settings: ModelSettings = {
+  //       selectedModel,
+  //       enhanceImage,
+  //       postProcess,
+  //     }
+  //     await AsyncStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings))
+  //   } catch (error) {
+  //     console.error("Lỗi khi lưu cài đặt:", error)
+  //   }
+  // }
 
   // Tải lại model
   const handleReloadModel = async () => {
     setIsLoading(true)
     try {
-      const success = await reloadModel()
+      const success = await reloadModel(selectedModel);
       setModelLoaded(success)
 
       if (success) {
-        Alert.alert("Thành công", "Đã tải lại model CNN thành công.")
+        Alert.alert("Thành công", "Đã tải lại model thành công.")
       } else {
         Alert.alert("Lỗi", "Không thể tải lại model. Vui lòng thử lại.")
       }
@@ -93,26 +134,47 @@ export default function SettingsScreen() {
           <Settings size={24} color={colors.primary} />
           <Text style={styles.headerTitle}>Cài đặt nhận dạng</Text>
         </View>
-
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Mô hình CNN</Text>
+          <Text style={styles.sectionTitle}>Chọn mô hình sử dụng</Text>
 
-          <View style={styles.modelStatusContainer}>
-            <Text style={styles.modelStatusLabel}>Trạng thái:</Text>
-            <View
-              style={[
-                styles.modelStatusIndicator,
-                modelLoaded ? styles.modelStatusLoaded : styles.modelStatusNotLoaded,
-              ]}
+          <View style={styles.settingItem}>
+            <View style={styles.settingInfo}>
+              <Text style={styles.settingTitle}>Mô hình CNN</Text>
+              <Text style={styles.settingDescription}>
+                Mô hình học sâu có độ chính xác cao, sử dụng TensorFlow Lite.
+              </Text>
+            </View>
+            <Switch
+              value={selectedModel === "CNN"}
+              onValueChange={(value) => {
+                if (value && selectedModel !== "CNN") {
+                  handleModelChange("CNN")
+                }
+              }}
+              trackColor={{ false: colors.border, true: colors.primaryLight }}
+              thumbColor={selectedModel === "CNN" ? colors.primary : "#f4f3f4"}
             />
-            <Text
-              style={[
-                styles.modelStatusText,
-                modelLoaded ? styles.modelStatusTextLoaded : styles.modelStatusTextNotLoaded,
-              ]}
-            >
-              {modelLoaded ? "Đã tải" : "Chưa tải"}
-            </Text>
+
+          </View>
+
+          <View style={styles.settingItem}>
+            <View style={styles.settingInfo}>
+              <Text style={styles.settingTitle}>Mô hình SVM</Text>
+              <Text style={styles.settingDescription}>
+                Mô hình máy vector hỗ trợ, nhẹ và hiệu quả với dữ liệu đơn giản.
+              </Text>
+            </View>
+            <Switch
+              value={selectedModel === "SVM"}
+              onValueChange={(value) => {
+                if (value && selectedModel !== "SVM") {
+                  handleModelChange("SVM")
+                }
+              }}
+              trackColor={{ false: colors.border, true: colors.primaryLight }}
+              thumbColor={selectedModel === "SVM" ? colors.primary : "#f4f3f4"}
+            />
+
           </View>
 
           <TouchableOpacity
@@ -127,39 +189,7 @@ export default function SettingsScreen() {
           </TouchableOpacity>
         </View>
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Xử lý hình ảnh</Text>
 
-          <View style={styles.settingItem}>
-            <View style={styles.settingInfo}>
-              <Text style={styles.settingTitle}>Tăng cường hình ảnh</Text>
-              <Text style={styles.settingDescription}>
-                Áp dụng điều chỉnh độ tương phản và lọc nhiễu để cải thiện chất lượng hình ảnh.
-              </Text>
-            </View>
-            <Switch
-              value={enhanceImage}
-              onValueChange={setEnhanceImage}
-              trackColor={{ false: colors.border, true: colors.primaryLight }}
-              thumbColor={enhanceImage ? colors.primary : "#f4f3f4"}
-            />
-          </View>
-
-          <View style={styles.settingItem}>
-            <View style={styles.settingInfo}>
-              <Text style={styles.settingTitle}>Hậu xử lý văn bản</Text>
-              <Text style={styles.settingDescription}>
-                Áp dụng các hiệu chỉnh để cải thiện độ chính xác của kết quả nhận dạng.
-              </Text>
-            </View>
-            <Switch
-              value={postProcess}
-              onValueChange={setPostProcess}
-              trackColor={{ false: colors.border, true: colors.primaryLight }}
-              thumbColor={postProcess ? colors.primary : "#f4f3f4"}
-            />
-          </View>
-        </View>
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Thông tin model</Text>
@@ -172,15 +202,39 @@ export default function SettingsScreen() {
             </View>
             <View style={styles.modelInfoItem}>
               <Text style={styles.modelInfoLabel}>Kiến trúc:</Text>
-              <Text style={styles.modelInfoValue}>2 lớp tích chập + 1 lớp fully connected</Text>
+              <Text style={styles.modelInfoValue}>
+                3 Conv2D (32, 64, 128 filters, 3x3) + 3 MaxPooling2D (2x2) + Flatten + 2 Dense (128, 62) + Dropout (0.5)
+              </Text>
             </View>
             <View style={styles.modelInfoItem}>
-              <Text style={styles.modelInfoLabel}>Kích thước đầu vào:</Text>
-              <Text style={styles.modelInfoValue}>28x28x1 (ảnh xám)</Text>
+              <Text style={styles.modelInfoLabel}>Kích thước input:</Text>
+              <Text style={styles.modelInfoValue}>28x28x1</Text>
             </View>
             <View style={styles.modelInfoItem}>
               <Text style={styles.modelInfoLabel}>Số lớp đầu ra:</Text>
-              <Text style={styles.modelInfoValue}>36 (A-Z, 0-9)</Text>
+              <Text style={styles.modelInfoValue}>62 (0-9, A-Z, a-z)</Text>
+            </View>
+          </View>
+
+          <View style={styles.modelInfoContainer}>
+            <Text style={styles.modelInfoTitle}>Model SVM</Text>
+            <View style={styles.modelInfoItem}>
+              <Text style={styles.modelInfoLabel}>Đường dẫn:</Text>
+              <Text style={styles.modelInfoValue}>D:\Text Extraction app\TextApp\backend\model\SVM.joblib</Text>
+            </View>
+            <View style={styles.modelInfoItem}>
+              <Text style={styles.modelInfoLabel}>Kiến trúc:</Text>
+              <Text style={styles.modelInfoValue}>
+                Feature Extractor (CNN: 3 Conv2D + 3 MaxPooling2D + Flatten) + HOG + PCA (256 components) + SVM (RBF, C=10)
+              </Text>
+            </View>
+            <View style={styles.modelInfoItem}>
+              <Text style={styles.modelInfoLabel}>Kích thước input:</Text>
+              <Text style={styles.modelInfoValue}>256 (đặc trưng sau PCA)</Text>
+            </View>
+            <View style={styles.modelInfoItem}>
+              <Text style={styles.modelInfoLabel}>Số lớp đầu ra:</Text>
+              <Text style={styles.modelInfoValue}>62 (0-9, A-Z, a-z)</Text>
             </View>
           </View>
         </View>
@@ -359,4 +413,24 @@ const styles = StyleSheet.create({
   modelStatusTextNotLoaded: {
     color: colors.error,
   },
+  modelOptionButton: {
+  paddingHorizontal: 12,
+  paddingVertical: 6,
+  borderWidth: 1,
+  borderColor: colors.border,
+  borderRadius: 6,
+  marginHorizontal: 4,
+},
+modelOptionButtonActive: {
+  backgroundColor: colors.primaryLight,
+  borderColor: colors.primary,
+},
+modelOptionText: {
+  color: colors.textSecondary,
+},
+modelOptionTextActive: {
+  color: colors.primary,
+  fontWeight: "600",
+},
+
 })

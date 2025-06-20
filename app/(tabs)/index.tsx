@@ -22,15 +22,20 @@ import * as Clipboard from "expo-clipboard"
 import { EmptyState } from "../../components/EmptyState"
 import { ScanTabs } from "../../components/ScanTabs"
 import { DrawingCanvas } from "../../components/DrawingCanvas"
-import { extractTextFromImageWithModel, loadModel, isModelLoaded } from "@/utils/model-handler"
+import {
+  extractTextFromImageWithModel,
+  loadModel,
+  isModelLoaded,
+} from "@/utils/model-handler"
 import AsyncStorage from "@react-native-async-storage/async-storage"
+import * as FileSystem from "expo-file-system"
 import 'expo-router/entry';
+import { AppState } from "react-native"
+import { getCurrentModel } from "@/utils/model-handler"
 
-// Key lưu trữ cài đặt trong AsyncStorage
 const SETTINGS_STORAGE_KEY = "text_extraction_model_settings"
 
 export default function ScanScreen() {
-  // Tách state cho mỗi tab để tránh mất dữ liệu khi chuyển tab
   const [cameraImageUri, setCameraImageUri] = useState<string | null>(null)
   const [drawingImageUri, setDrawingImageUri] = useState<string | null>(null)
   const [extractedText, setExtractedText] = useState<string | null>(null)
@@ -38,86 +43,136 @@ export default function ScanScreen() {
   const [isModelLoading, setIsModelLoading] = useState(false)
   const { addScan } = useScanStore()
   const [activeTab, setActiveTab] = useState<"camera" | "drawing">("camera")
+  const [selectedModel, setSelectedModel] = useState<"CNN" | "SVM">("CNN")
+  const [modelReady, setModelReady] = useState(false)
 
-  // State cho cấu hình model
-  const [modelConfig, setModelConfig] = useState({
+  const checkModelStatus = async () => {
+    const ready = await isModelLoaded();
+    setModelReady(ready);
+
+    const current = await getCurrentModel();
+    if (current) setSelectedModel(current);
+  }
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", async (state) => {
+      if (state === "active") {
+        await loadModelSettings()
+        await checkModelStatus()
+      }
+    })
+    return () => subscription.remove()
+  }, [])
+
+
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") {
+        loadModelSettings()  // mỗi khi quay lại app, tự động cập nhật model đã chọn
+        checkModelStatus()
+      }
+    })
+
+    return () => {
+      subscription.remove()
+    }
+  }, [])
+
+
+
+  useEffect(() => {
+    checkModelStatus()
+  }, [])
+
+  // const checkModelStatus = async () => {
+  //   const ready = await isModelLoaded()
+  //   setModelReady(ready)
+  // }
+
+
+
+  type ModelConfig = {
+    enhanceImage: boolean;
+    postProcess: boolean;
+    model: "CNN" | "SVM";
+  };
+
+  const [modelConfig, setModelConfig] = useState<ModelConfig>({
     enhanceImage: true,
     postProcess: true,
-  })
+    model: "CNN",
+  });
 
-  // Tải model và cài đặt khi component mount
+
   useEffect(() => {
     loadModelSettings()
     initializeModel()
   }, [])
 
-  // Khởi tạo model
   const initializeModel = async () => {
-    if (!isModelLoaded()) {
+    if (!(await isModelLoaded())) {
       setIsModelLoading(true)
       try {
-        const success = await loadModel()
+        const success = await loadModel(selectedModel)
         if (!success) {
-          Alert.alert("Lỗi tải model", "Không thể tải model CNN. Vui lòng kiểm tra đường dẫn và thử lại.", [
-            { text: "OK" },
-          ])
+          Alert.alert("Lỗi tải model", "Không thể tải model CNN. Vui lòng kiểm tra đường dẫn và thử lại.")
         }
       } catch (error) {
         console.error("Lỗi khi khởi tạo model:", error)
-        Alert.alert("Lỗi", "Đã xảy ra lỗi khi tải model. Vui lòng thử lại sau.", [{ text: "OK" }])
+        Alert.alert("Lỗi", "Đã xảy ra lỗi khi tải model. Vui lòng thử lại sau.")
       } finally {
         setIsModelLoading(false)
       }
     }
   }
 
-  // Tải cài đặt model từ AsyncStorage
   const loadModelSettings = async () => {
     try {
       const settingsJson = await AsyncStorage.getItem(SETTINGS_STORAGE_KEY)
       if (settingsJson) {
         const settings = JSON.parse(settingsJson)
+        const newModel = settings.selectedModel || "CNN"
         setModelConfig({
           enhanceImage: settings.enhanceImage,
           postProcess: settings.postProcess,
+          model: newModel,
         })
+        setSelectedModel(newModel)
       }
     } catch (error) {
       console.error("Lỗi khi tải cài đặt model:", error)
     }
   }
 
-  // Lấy imageUri hiện tại dựa vào tab đang active
+
   const getCurrentImageUri = () => {
     return activeTab === "camera" ? cameraImageUri : drawingImageUri
   }
 
-  const handleImageSelected = (uri: string) => {
+  const handleImageSelected = async (uri: string) => {
+    const info = await FileSystem.getInfoAsync(uri)
+    if (!info.exists) {
+      Alert.alert("Không thể đọc ảnh", "Đường dẫn ảnh không hợp lệ.")
+      return
+    }
     setCameraImageUri(uri)
     setExtractedText(null)
   }
 
-  const extractText = async () => {
+  const extractText = async (source: "camera" | "drawing" = "camera") => {
     const imageUri = getCurrentImageUri()
     if (!imageUri) return
 
-    // Kiểm tra xem model đã được tải chưa
-    if (!isModelLoaded()) {
-      Alert.alert(
-        "Model chưa sẵn sàng",
-        "Model CNN chưa được tải. Vui lòng đợi hoặc tải lại model trong phần Cài đặt.",
-        [{ text: "OK" }],
-      )
+    if (!(await isModelLoaded())) {
+      Alert.alert("Model chưa sẵn sàng", "Model CNN chưa được tải. Vui lòng đợi hoặc tải lại model trong phần Cài đặt.")
       return
     }
 
     setIsExtracting(true)
     try {
-      // Sử dụng model để trích xuất văn bản
-      const text = await extractTextFromImageWithModel(imageUri, modelConfig)
+      const text = await extractTextFromImageWithModel(imageUri, modelConfig, source)
       setExtractedText(text)
-
-      // Lưu vào lịch sử
       addScan({
         id: Date.now().toString(),
         imageUri,
@@ -125,8 +180,8 @@ export default function ScanScreen() {
         createdAt: Date.now(),
       })
     } catch (error) {
-      console.error("Lỗi khi trích xuất văn bản:", error)
-      Alert.alert("Lỗi trích xuất", "Không thể trích xuất văn bản từ hình ảnh. Vui lòng thử lại.", [{ text: "OK" }])
+      console.error("Lỗi khi nhận diện ký tự:", error)
+      Alert.alert("Lỗi nhận diện", "Không thể nhận diện ký tự từ hình ảnh. Vui lòng thử lại.")
     } finally {
       setIsExtracting(false)
     }
@@ -134,9 +189,8 @@ export default function ScanScreen() {
 
   const copyToClipboard = async () => {
     if (!extractedText) return
-
     await Clipboard.setStringAsync(extractedText)
-    Alert.alert("Thành công", "Đã sao chép văn bản vào clipboard!")
+    Alert.alert("Thành công", "Đã sao chép ký tự vào clipboard!")
   }
 
   const resetScan = () => {
@@ -148,50 +202,40 @@ export default function ScanScreen() {
     setExtractedText(null)
   }
 
-  const handleDrawingCapture = (uri: string) => {
+  const handleDrawingCapture = async (uri: string) => {
     setDrawingImageUri(uri)
-
-    // Kiểm tra xem model đã được tải chưa
-    if (!isModelLoaded()) {
-      Alert.alert(
-        "Model chưa sẵn sàng",
-        "Model CNN chưa được tải. Vui lòng đợi hoặc tải lại model trong phần Cài đặt.",
-        [{ text: "OK" }],
-      )
-      return
-    }
-
-    // Tự động trích xuất văn bản từ hình vẽ
     setIsExtracting(true)
-
-    // Xử lý trích xuất
-    setTimeout(async () => {
-      try {
-        // Sử dụng model để trích xuất văn bản
-        const text = await extractTextFromImageWithModel(uri, modelConfig)
-        setExtractedText(text)
-
-        // Lưu vào lịch sử
-        addScan({
-          id: Date.now().toString(),
-          imageUri: uri,
-          extractedText: text,
-          createdAt: Date.now(),
-        })
-      } catch (error) {
-        console.error("Lỗi khi trích xuất văn bản:", error)
-        Alert.alert("Lỗi trích xuất", "Không thể trích xuất văn bản từ hình vẽ. Vui lòng thử lại.", [{ text: "OK" }])
-      } finally {
-        setIsExtracting(false)
-      }
-    }, 500)
+    try {
+      const text = await extractTextFromImageWithModel(uri, modelConfig, "drawing")
+      setExtractedText(text)
+      addScan({
+        id: Date.now().toString(),
+        imageUri: uri,
+        extractedText: text,
+        createdAt: Date.now(),
+      })
+    } catch (error) {
+      console.error("Lỗi khi nhận diện từ canvas:", error)
+      Alert.alert("Lỗi", "Không thể nhận diện ký tự từ canvas.")
+    } finally {
+      setIsExtracting(false)
+    }
   }
 
-  // Xử lý chuyển tab
+
   const handleTabChange = (tab: "camera" | "drawing") => {
     setActiveTab(tab)
-    // Không xóa extractedText khi chuyển tab
+
+    // Reset dữ liệu của tab còn lại
+    if (tab === "camera") {
+      setDrawingImageUri(null)
+    } else {
+      setCameraImageUri(null)
+    }
+
+    setExtractedText(null)
   }
+
 
   return (
     <SafeAreaView style={styles.container}>
@@ -202,14 +246,15 @@ export default function ScanScreen() {
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.header}>
-          <Text style={styles.title}>Trích xuất văn bản từ hình ảnh</Text>
+          <Text style={styles.title}>Nhận diện ký tự từ hình ảnh</Text>
           <Text style={styles.subtitle}>
             {isModelLoading
-              ? "Đang tải model CNN..."
-              : isModelLoaded()
-                ? "Model CNN đã sẵn sàng"
-                : "Model CNN chưa được tải"}
+              ? `Đang tải model ${selectedModel}...`
+              : (modelReady ? `Model ${selectedModel} đã sẵn sàng` : `Model ${selectedModel} chưa được tải`)}
           </Text>
+
+
+
         </View>
 
         {isModelLoading ? (
@@ -235,8 +280,8 @@ export default function ScanScreen() {
 
                   {!extractedText && !isExtracting && (
                     <Button
-                      title="Trích xuất văn bản"
-                      onPress={extractText}
+                      title="Nhận diện ký tự"
+                      onPress={() => extractText("camera")}
                       style={styles.extractButton}
                       icon={<Scan size={20} color="white" />}
                       disabled={!isModelLoaded()}
@@ -253,7 +298,7 @@ export default function ScanScreen() {
             {isExtracting && (
               <View style={styles.loadingContainer}>
                 <ActivityIndicator size="large" color={colors.primary} />
-                <Text style={styles.loadingText}>Đang trích xuất văn bản với model CNN...</Text>
+                <Text style={styles.loadingText}>Đang nhận diện ký tự với model {selectedModel}...</Text>
                 <Text style={styles.loadingSubText}>
                   {modelConfig.enhanceImage ? "Đang tăng cường hình ảnh..." : ""}
                 </Text>
@@ -264,24 +309,13 @@ export default function ScanScreen() {
               <View style={styles.resultContainer}>
                 <View style={styles.textHeaderContainer}>
                   <FileText size={20} color={colors.primary} />
-                  <Text style={styles.textHeader}>Văn bản đã trích xuất</Text>
+                  <Text style={styles.textHeader}>Ký tự đã nhận diện</Text>
                 </View>
                 <Text style={styles.extractedText}>{extractedText}</Text>
 
-                <View style={styles.modelInfoContainer}>
-                  <Text style={styles.modelInfoText}>
-                    Tăng cường hình ảnh:{" "}
-                    <Text style={styles.modelInfoHighlight}>{modelConfig.enhanceImage ? "Có" : "Không"}</Text>
-                  </Text>
-                  <Text style={styles.modelInfoText}>
-                    Hậu xử lý kết quả:{" "}
-                    <Text style={styles.modelInfoHighlight}>{modelConfig.postProcess ? "Có" : "Không"}</Text>
-                  </Text>
-                </View>
-
                 <View style={styles.actionButtons}>
                   <Button
-                    title="Sao chép văn bản"
+                    title="Sao chép ký tự"
                     onPress={copyToClipboard}
                     variant="primary"
                     style={styles.actionButton}
@@ -303,7 +337,7 @@ export default function ScanScreen() {
               <View style={styles.infoContainer}>
                 <EmptyState
                   title="Chưa chọn hình ảnh"
-                  description="Chọn hình ảnh từ thư viện hoặc chụp ảnh mới để trích xuất văn bản."
+                  description="Chọn hình ảnh từ thư viện hoặc chụp ảnh mới để nhận diện ký tự."
                 />
               </View>
             )}
@@ -407,21 +441,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: colors.text,
     lineHeight: 24,
-  },
-  modelInfoContainer: {
-    marginTop: 16,
-    padding: 12,
-    backgroundColor: colors.background,
-    borderRadius: 8,
-  },
-  modelInfoText: {
-    fontSize: 14,
-    color: colors.textSecondary,
-    marginBottom: 4,
-  },
-  modelInfoHighlight: {
-    color: colors.primary,
-    fontWeight: "500",
   },
   actionButtons: {
     flexDirection: "row",
