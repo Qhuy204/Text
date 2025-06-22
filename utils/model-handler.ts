@@ -33,7 +33,7 @@ export interface LoadModelResult {
 class OCRAPIClient {
   private baseURL: string;
 
-  constructor(baseURL: string = "http://192.168.1.29:5000") {
+  constructor(baseURL: string = "http://192.168.241.95:5000") {
     this.baseURL = baseURL;
   }
 
@@ -219,7 +219,7 @@ export const reloadModel = async (model: "CNN" | "SVM"): Promise<boolean> => {
 
 export async function getCurrentModel(): Promise<"CNN" | "SVM" | null> {
   try {
-    const res = await fetch("http://192.168.1.29:5000/health");
+    const res = await fetch("http://192.168.241.95:5000/health");
     const data = await res.json();
     return data.current_model || null;
   } catch {
